@@ -14,6 +14,7 @@
 package executor
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/juju/errors"
@@ -24,11 +25,13 @@ import (
 	"github.com/pingcap/tidb/infoschema"
 	"github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/model"
+	"github.com/pingcap/tidb/mysql"
 	"github.com/pingcap/tidb/optimizer/plan"
 	"github.com/pingcap/tidb/parser/opcode"
 	"github.com/pingcap/tidb/sessionctx/autocommit"
 	"github.com/pingcap/tidb/sessionctx/variable"
 	"github.com/pingcap/tidb/table"
+	"github.com/pingcap/tidb/util/charset"
 	"github.com/pingcap/tidb/util/types"
 	"github.com/pingcap/tipb/go-tipb"
 )
@@ -483,14 +486,15 @@ func (b *executorBuilder) buildAggregate(v *plan.Aggregate) Executor {
 		fields[2*i+1] = ft
 		fields[2*i+2] = agg.GetType()
 	}
+	fmt.Println("AggFields", len(fields))
 	xSrc.AddAggregate(pbAggFuncs, pbByItems, fields)
-	e = &XAggregateExec{
+	xe := &XAggregateExec{
 		Src:          src,
 		ResultFields: v.Fields(),
 		ctx:          b.ctx,
 		AggFuncs:     v.AggFuncs,
 	}
-	return src
+	return xe
 }
 
 func (b *executorBuilder) buildHaving(v *plan.Having) Executor {

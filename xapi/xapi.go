@@ -35,9 +35,10 @@ var (
 
 // SelectResult is used to get response rows from SelectRequest.
 type SelectResult struct {
-	index  bool
-	fields []*types.FieldType
-	resp   kv.Response
+	index     bool
+	aggregate bool
+	fields    []*types.FieldType
+	resp      kv.Response
 }
 
 // Next returns the next row.
@@ -51,11 +52,17 @@ func (r *SelectResult) Next() (subResult *SubResult, err error) {
 		return nil, nil
 	}
 	subResult = &SubResult{
-		index:  r.index,
-		fields: r.fields,
-		reader: reader,
+		index:     r.index,
+		fields:    r.fields,
+		reader:    reader,
+		aggregate: r.aggregate,
 	}
 	return
+}
+
+func (r *SelectResult) SetFields(fields []*types.FieldType) {
+	r.fields = fields
+	r.aggregate = true
 }
 
 // Close closes SelectResult.
@@ -65,11 +72,12 @@ func (r *SelectResult) Close() error {
 
 // SubResult represents a subset of select result.
 type SubResult struct {
-	index  bool
-	fields []*types.FieldType
-	reader io.ReadCloser
-	resp   *tipb.SelectResponse
-	cursor int
+	index     bool
+	aggregate bool
+	fields    []*types.FieldType
+	reader    io.ReadCloser
+	resp      *tipb.SelectResponse
+	cursor    int
 }
 
 // Next returns the next row of the sub result.
@@ -108,12 +116,14 @@ func (r *SubResult) Next() (handle int64, data []types.Datum, err error) {
 		// as caller will check if data is nil to finish iteration.
 		data = make([]types.Datum, 0)
 	}
-	handleBytes := row.GetHandle()
-	datums, err := codec.Decode(handleBytes)
-	if err != nil {
-		return 0, nil, errors.Trace(err)
+	if !r.aggregate {
+		handleBytes := row.GetHandle()
+		datums, err := codec.Decode(handleBytes)
+		if err != nil {
+			return 0, nil, errors.Trace(err)
+		}
+		handle = datums[0].GetInt64()
 	}
-	handle = datums[0].GetInt64()
 	r.cursor++
 	return
 }
@@ -135,11 +145,14 @@ func Select(client kv.Client, req *tipb.SelectRequest, concurrency int) (*Select
 		return nil, errors.New("client returns nil response")
 	}
 	result := &SelectResult{resp: resp}
-	if req.TableInfo != nil {
-		result.fields = tablecodec.ProtoColumnsToFieldTypes(req.TableInfo.Columns)
-	} else {
-		result.fields = tablecodec.ProtoColumnsToFieldTypes(req.IndexInfo.Columns)
-		result.index = true
+	// If Aggregates is not nil, we should set result fields latter.
+	if req.Aggregates != nil {
+		if req.TableInfo != nil {
+			result.fields = tablecodec.ProtoColumnsToFieldTypes(req.TableInfo.Columns)
+		} else {
+			result.fields = tablecodec.ProtoColumnsToFieldTypes(req.IndexInfo.Columns)
+			result.index = true
+		}
 	}
 	return result, nil
 }

@@ -111,6 +111,10 @@ func (e *XSelectTableExec) Next() (*Row, error) {
 			e.subResult = nil
 			continue
 		}
+		if len(e.aggFuncs) > 0 {
+			// compose aggreagte row
+			return &Row{Data: rowData}, nil
+		}
 		fullRowData := make([]types.Datum, len(e.tablePlan.Fields()))
 		var j int
 		for i, field := range e.tablePlan.Fields() {
@@ -180,6 +184,7 @@ func (e *XSelectTableExec) doRequest() error {
 	selReq.Aggregates = e.aggFuncs
 	selReq.GroupBy = e.byItems
 	e.result, err = xapi.Select(txn.GetClient(), selReq, defaultConcurrency)
+	e.result.SetFields(e.aggFields)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -225,7 +230,7 @@ type lookupTableTask struct {
 	doneCh  chan error
 }
 
-func (e *XSelectIndexExec) AddAggregate(funcs []*tipb.Expr, byItems []*tipb.ByItem) {
+func (e *XSelectIndexExec) AddAggregate(funcs []*tipb.Expr, byItems []*tipb.ByItem, fields []*types.FieldType) {
 	e.aggFuncs = funcs
 	e.byItems = byItems
 }
@@ -1054,7 +1059,7 @@ func (e *XAggregateExec) Next() (*Row, error) {
 			}
 		}
 		e.executed = true
-		if (len(e.groups) == 0) && (len(e.GroupByItems) == 0) {
+		if len(e.groups) == 0 {
 			// If no groupby and no data, we should add an empty group.
 			// For example:
 			// "select count(c) from t;" should return one row [0]
@@ -1071,25 +1076,6 @@ func (e *XAggregateExec) Next() (*Row, error) {
 	}
 	e.currentGroupIndex++
 	return &Row{}, nil
-}
-
-func (e *XAggregateExec) getGroupKey() (string, error) {
-	if len(e.GroupByItems) == 0 {
-		return singleGroup, nil
-	}
-	vals := make([]types.Datum, 0, len(e.GroupByItems))
-	for _, item := range e.GroupByItems {
-		v, err := evaluator.Eval(e.ctx, item.Expr)
-		if err != nil {
-			return "", errors.Trace(err)
-		}
-		vals = append(vals, v)
-	}
-	bs, err := codec.EncodeValue([]byte{}, vals...)
-	if err != nil {
-		return "", errors.Trace(err)
-	}
-	return string(bs), nil
 }
 
 // Fetch a single row from src and update each aggregate function.
@@ -1110,7 +1096,9 @@ func (e *XAggregateExec) innerNext() (bool, error) {
 		}
 	}
 	e.executed = true
-	groupKey, err := e.getGroupKey()
+	//groupKey, err := e.getGroupKey()
+	var groupKey string
+	var err error
 	if err != nil {
 		return false, errors.Trace(err)
 	}
